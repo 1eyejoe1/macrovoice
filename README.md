@@ -1,5 +1,16 @@
 # macrovoice
 
+Macrovoice was originally created by [caasols](https://github.com/caasols).
+Credit for the original project and its implementation belongs to them; see the
+[upstream repository](https://github.com/caasols/macrovoice).
+
+This personal fork adds direct Macrowhisper handoff for using VoiceInk alongside
+Superwhisper. The fork's changes were **vibe coded with OpenAI Codex**. The fork
+owner has limited familiarity with the code and does not provide technical support
+or ongoing maintenance commitments. This fork is provided as-is; questions, issues,
+discussions, and pull requests will not be reviewed or answered by the fork owner.
+These statements describe this fork, not the original creator or upstream project.
+
 ![macOS](https://img.shields.io/badge/macOS-black?logo=apple&style=flat)
 ![Python](https://img.shields.io/badge/Python_3-black?logo=python&style=flat)
 [![Tests](https://github.com/caasols/macrovoice/actions/workflows/tests.yml/badge.svg)](https://github.com/caasols/macrovoice/actions/workflows/tests.yml)
@@ -685,11 +696,6 @@ which pastes it with smart casing and spacing; `--mode` reaches `triggerModes`, 
 triggers fire. Verified at real human speaking cadence: five dictations in ten seconds all
 delivered, a 633-character dictation intact, quotes and shell metacharacters clean, and accented
 text measured end to end.
-
-## Contributing
-
-Issues and pull requests are welcome. Please open a discussion first if you plan a larger
-change, so we can align on the approach.
 
 ## License
 
