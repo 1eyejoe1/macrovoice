@@ -80,7 +80,7 @@ class MacrovoiceWrapperTest(unittest.TestCase):
 
     def test_wrapper_publishes_through_a_login_shell(self):
         result = run_as_voiceink(
-            f"{MACROVOICE_SH} --watch {self.watch} --gap 0.01",
+            f"{MACROVOICE_SH} --no-liveness-check --watch {self.watch} --gap 0.01",
             "wrapper works",
             self.watch,
         )
@@ -92,7 +92,7 @@ class MacrovoiceWrapperTest(unittest.TestCase):
         # so a per-Mode wrapper line has to pass it. If this breaks, macrowhisper's
         # triggerModes silently never match and the user sees no error.
         result = run_as_voiceink(
-            f"{MACROVOICE_SH} --mode email --watch {self.watch} --gap 0.01",
+            f"{MACROVOICE_SH} --no-liveness-check --mode email --watch {self.watch} --gap 0.01",
             "moded",
             self.watch,
         )
@@ -103,7 +103,7 @@ class MacrovoiceWrapperTest(unittest.TestCase):
         # VoiceInk's working directory is undocumented. The wrapper resolves its
         # own location via ${0:A:h} precisely so this cannot matter; assert it.
         result = run_as_voiceink(
-            f"{MACROVOICE_SH} --watch {self.watch} --gap 0.01",
+            f"{MACROVOICE_SH} --no-liveness-check --watch {self.watch} --gap 0.01",
             "cwd independent",
             self.watch,
             cwd="/tmp",

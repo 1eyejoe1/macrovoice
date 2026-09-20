@@ -96,6 +96,10 @@ class Context:
     # tested without touching the developer's own machine. None means the real
     # one; see `home_dir` below.
     home: Optional[Path] = None
+    # ``watch`` is the original synthetic-recording mode. ``direct`` sends the
+    # generated meta file to `macrowhisper --run-auto --meta` instead, so the
+    # macrowhisper watch root is deliberately a different directory.
+    handoff: str = "watch"
 
     def home_dir(self) -> Path:
         return Path.home() if self.home is None else Path(self.home)

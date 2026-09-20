@@ -129,13 +129,14 @@ def paste_mode(name="Dictation", is_default=True):
     )
 
 
-def context(mw=None, bridge=None, watch_root="/tmp/w", vi=None, home=None):
+def context(mw=None, bridge=None, watch_root="/tmp/w", vi=None, home=None, handoff="watch"):
     return Context(
         watch_root=Path(watch_root),
         mw=mw or FakeMacrowhisper(),
         bridge=bridge or FakeBridge(),
         vi=vi if vi is not None else FakeVoiceInk(),
         home=Path(home) if home is not None else None,
+        handoff=handoff,
     )
 
 
@@ -513,6 +514,26 @@ class TestWatchMatch(unittest.TestCase):
             watch_root="/tmp/w",
         )
         self.assertIs(registry._check_watch_match(ctx).outcome, Outcome.OK)
+
+    def test_direct_handoff_accepts_a_separate_superwhisper_watch_directory(self):
+        ctx = context(
+            mw=FakeMacrowhisper(config={"defaults": {"watch": "/tmp/superwhisper"}}),
+            watch_root="/tmp/macrovoice",
+            handoff="direct",
+        )
+        finding = registry._check_watch_match(ctx)
+        self.assertIs(finding.outcome, Outcome.OK)
+        self.assertIn("direct handoff", finding.detail)
+
+    def test_direct_handoff_rejects_watching_its_own_state_directory(self):
+        ctx = context(
+            mw=FakeMacrowhisper(config={"defaults": {"watch": "/tmp/macrovoice"}}),
+            watch_root="/tmp/macrovoice",
+            handoff="direct",
+        )
+        finding = registry._check_watch_match(ctx)
+        self.assertIs(finding.outcome, Outcome.PROBLEM)
+        self.assertIn("Superwhisper", finding.fix_hint)
 
     def test_the_running_daemons_live_value_wins_over_the_file(self):
         # Friction trap 5: editing the config while the daemon runs can be

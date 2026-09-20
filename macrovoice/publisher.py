@@ -432,6 +432,62 @@ class Publisher:
 
         return published
 
+    def drain_direct(self, deliver) -> List[Path]:
+        """Run ``deliver(meta_path, remaining_seconds)`` for queued files.
+
+        Direct CLI handoff needs the exact same durable spool and cross-process
+        lock as watcher delivery, but it must *not* publish anything into
+        ``recordings/``.  A truthy callback result is the acknowledgement: only
+        then is its spool folder removed.  A false result stops the drain so a
+        temporarily broken macrowhisper cannot turn a backlog into a burst of
+        failed invocations.
+
+        Kept beside ``drain`` instead of in the CLI so the queue's concurrency
+        guarantee stays in its one owner.  Unlike watcher publishing, a direct
+        command is already serialised by the lock, so no artificial filesystem
+        watcher gap is needed.
+        """
+        self._ensure_layout()
+        deadline = time.monotonic() + self.drain_budget_s
+        delivered: List[Path] = []
+
+        try:
+            lock_handle = open(self.lock_path, "w")
+        except OSError:  # pragma: no cover
+            return delivered
+
+        try:
+            try:
+                fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OSError as exc:
+                if exc.errno in (errno.EACCES, errno.EAGAIN):
+                    return delivered
+                raise  # pragma: no cover
+
+            for folder in self._spooled_folders():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                meta_path = folder / "meta.json"
+                try:
+                    acknowledged = deliver(meta_path, remaining)
+                except Exception:  # pragma: no cover - callback containment
+                    acknowledged = False
+                if not acknowledged:
+                    break
+                try:
+                    shutil.rmtree(folder)
+                except OSError:  # pragma: no cover - leave it for a later run
+                    break
+                delivered.append(folder)
+        finally:
+            try:
+                fcntl.flock(lock_handle, fcntl.LOCK_UN)
+            finally:
+                lock_handle.close()
+
+        return delivered
+
     # The one call the CLI makes ---------------------------------------------
 
     def publish(self, meta: Dict[str, Any]) -> PublishOutcome:

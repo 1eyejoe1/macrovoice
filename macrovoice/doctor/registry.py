@@ -172,7 +172,10 @@ def _check_spool(ctx):
     if waiting:
         return Finding.problem(
             "%d transcript(s) waiting to be published (spool plus staging)" % waiting,
-            "%s --drain-only --watch %s" % (ctx.bridge.script_path(), snapshot.watch_root),
+            "%s --handoff %s --drain-only --watch %s" % (
+                shlex.quote(str(ctx.bridge.script_path())), ctx.handoff,
+                shlex.quote(str(snapshot.watch_root)),
+            ),
         )
     return Finding.ok()
 
@@ -271,6 +274,21 @@ def _check_watch_match(ctx):
         source = str(saved)
 
     hint = CONFIG_SURGERY_HINT % (saved or "the config")
+    if ctx.handoff == "direct":
+        # This is the point of direct handoff: macrovoice's queue must NOT be
+        # the daemon's watch root.  The daemon stays configured for real
+        # Superwhisper dictations while VoiceInk calls `--run-auto --meta`.
+        if Path(configured).expanduser() == ctx.watch_root:
+            return Finding.problem(
+                "direct handoff is selected, but macrowhisper still watches "
+                "%s, macrovoice's state directory" % configured,
+                "set defaults.watch back to your Superwhisper directory, then "
+                "re-run doctor --handoff direct",
+            )
+        return Finding.ok(
+            "direct handoff; macrowhisper watches %s (from %s) while macrovoice "
+            "uses --run-auto --meta" % (configured, source)
+        )
     if Path(configured).expanduser() != ctx.watch_root:
         return Finding.problem(
             "macrowhisper watches %s (from %s) but doctor is checking %s"
@@ -343,6 +361,8 @@ def _check_simesc(ctx):
     in whatever app the user is typing into. Measured 2026-08-08: it closed a
     ProtonMail draft.
     """
+    if ctx.handoff == "direct":
+        return Finding.ok("simEsc has no practical effect in CLI execution")
     status = ctx.mw.status()
     if status.sim_esc is None:
         return Finding.unknown("macrowhisper --status did not report simEsc")

@@ -50,6 +50,20 @@ def _parse_args(argv):
             "contract so a script written now keeps it when repairs land."
         ),
     )
+    parser.add_argument(
+        "--handoff",
+        choices=("watch", "direct"),
+        default="watch",
+        help=(
+            "Match macrovoice delivery mode: watch expects macrowhisper to watch "
+            "this directory; direct expects --run-auto --meta handoff instead"
+        ),
+    )
+    parser.add_argument(
+        "--macrowhisper-bin",
+        default="macrowhisper",
+        help="macrowhisper executable used by direct handoff (default: macrowhisper)",
+    )
     return parser.parse_args(argv)
 
 
@@ -58,9 +72,10 @@ def doctor_main(argv) -> int:
     watch_root = Path(args.watch).expanduser()
     ctx = Context(
         watch_root=watch_root,
-        mw=Macrowhisper(),
+        mw=Macrowhisper(args.macrowhisper_bin),
         bridge=BridgeState(watch_root),
         vi=VoiceInk(),
+        handoff=args.handoff,
     )
     results = run(CHECKS, ctx)
     sys.stdout.write(render(results))

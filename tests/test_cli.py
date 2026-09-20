@@ -154,6 +154,80 @@ class TestDeliveryPaths(CliTestCase):
         self.assertEqual(self.sole_meta()["result"], text)
 
 
+class TestDirectHandoff(CliTestCase):
+    def setUp(self):
+        super().setUp()
+        self.command_args = Path(self._tmp.name) / "command-args"
+        self.copied_meta = Path(self._tmp.name) / "received-meta.json"
+        self.binary = Path(self._tmp.name) / "fake-macrowhisper"
+        self.binary.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$@\" > \"$HANDOFF_ARGS\"\n"
+            "cp \"$3\" \"$HANDOFF_META\"\n"
+            "echo \"Executed insert action 'test' via active action fallback\"\n",
+            encoding="utf-8",
+        )
+        self.binary.chmod(0o755)
+
+    def test_direct_handoff_invokes_run_auto_with_the_generated_meta(self):
+        result = self.run_cli(
+            "--handoff", "direct", "--macrowhisper-bin", str(self.binary),
+            transcript="hello from direct handoff",
+            extra_env={
+                "HANDOFF_ARGS": str(self.command_args),
+                "HANDOFF_META": str(self.copied_meta),
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.command_args.read_text(encoding="utf-8").splitlines()[:2],
+            ["--run-auto", "--meta"],
+        )
+        self.assertEqual(
+            json.loads(self.copied_meta.read_text(encoding="utf-8"))["result"],
+            "hello from direct handoff",
+        )
+        self.assertEqual(list((self.watch / ".spool").iterdir()), [])
+        self.assertEqual(list((self.watch / "recordings").iterdir()), [])
+
+    def test_failed_direct_handoff_keeps_the_meta_in_the_spool(self):
+        self.binary.write_text("#!/bin/sh\necho 'Failed to run auto action resolution.'\nexit 0\n", encoding="utf-8")
+        self.binary.chmod(0o755)
+        result = self.run_cli(
+            "--handoff", "direct", "--macrowhisper-bin", str(self.binary),
+            transcript="must remain recoverable",
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        spooled = list((self.watch / ".spool").iterdir())
+        self.assertEqual(len(spooled), 1)
+        self.assertEqual(
+            json.loads((spooled[0] / "meta.json").read_text(encoding="utf-8"))["result"],
+            "must remain recoverable",
+        )
+
+        self.binary.write_text(
+            "#!/bin/sh\n"
+            "printf '%s\\n' \"$@\" > \"$HANDOFF_ARGS\"\n"
+            "cp \"$3\" \"$HANDOFF_META\"\n"
+            "echo \"Executed insert action 'test' via active action fallback\"\n",
+            encoding="utf-8",
+        )
+        self.binary.chmod(0o755)
+        recovered = self.run_cli(
+            "--handoff", "direct", "--macrowhisper-bin", str(self.binary), "--drain-only",
+            extra_env={
+                "HANDOFF_ARGS": str(self.command_args),
+                "HANDOFF_META": str(self.copied_meta),
+            },
+        )
+        self.assertEqual(recovered.returncode, 0, recovered.stderr)
+        self.assertEqual(
+            json.loads(self.copied_meta.read_text(encoding="utf-8"))["result"],
+            "must remain recoverable",
+        )
+        self.assertEqual(list((self.watch / ".spool").iterdir()), [])
+
+
 class TestNothingToPublish(CliTestCase):
     def test_empty_transcript_publishes_nothing_and_exits_zero(self):
         result = self.run_cli(transcript="", stdin_text="")

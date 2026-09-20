@@ -20,6 +20,7 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+from .handoff import DirectHandoff
 from .meta import build_meta
 from .publisher import DEFAULT_MIN_GAP_S, Publisher
 from .listener import is_listening
@@ -62,6 +63,24 @@ def _parse_args(argv):
             "Mode name to record as modeName, feeding macrowhisper's triggerModes. "
             "VoiceInk does NOT expose the mode to the command, so a per-Mode wrapper "
             "must pass it here explicitly."
+        ),
+    )
+    parser.add_argument(
+        "--handoff",
+        choices=("watch", "direct"),
+        default="watch",
+        help=(
+            "How to deliver a generated meta.json: watch publishes into the "
+            "macrowhisper watch root (default); direct runs `macrowhisper "
+            "--run-auto --meta` and leaves macrowhisper's normal watch root alone"
+        ),
+    )
+    parser.add_argument(
+        "--macrowhisper-bin",
+        default="macrowhisper",
+        help=(
+            "macrowhisper executable used by --handoff direct "
+            "(default: macrowhisper)"
         ),
     )
     parser.add_argument(
@@ -126,15 +145,29 @@ def main(argv=None) -> int:
         # sentence; everything else publishes. Deferring on uncertainty would
         # stop delivery on a working setup, which is worse than the loss it
         # prevents. See macrovoice/listener.py.
-        listener = None if args.no_liveness_check else is_listening
+        # Direct delivery checks the execution acknowledgment itself. A separate
+        # status probe cannot guarantee the subsequent command will succeed.
+        listener = (
+            None
+            if args.no_liveness_check or args.handoff == "direct"
+            else is_listening
+        )
         publisher = Publisher(watch_root, min_gap_s=args.gap, listener=listener)
+        direct = (
+            DirectHandoff(binary=args.macrowhisper_bin)
+            if args.handoff == "direct"
+            else None
+        )
 
         if args.drain_only:
-            published = publisher.drain()
-            if publisher.listener_said_down:
+            published = direct.drain(publisher) if direct else publisher.drain()
+            if direct and direct.last_error:
+                _log(watch_root, "drain-only: %s" % direct.last_error)
+            elif publisher.listener_said_down:
                 _log(watch_root, _NOT_RUNNING % ("drain-only: nothing published"))
             else:
-                _log(watch_root, f"drain-only: published {len(published)}")
+                verb = "directly handed off" if direct else "published"
+                _log(watch_root, f"drain-only: {verb} {len(published)}")
             return 0
 
         if env_supplies_transcript(os.environ) or sys.stdin.isatty():
@@ -158,6 +191,27 @@ def main(argv=None) -> int:
             return 0
 
         meta = build_meta(transcript, mode_name=args.mode)
+        if direct:
+            spooled = publisher.stage(meta)
+            delivered = direct.drain(publisher)
+            ours_delivered = any(folder.name == spooled.name for folder in delivered)
+            detail = f"text={transcript!r}" if args.log_transcript else f"chars={len(transcript)}"
+            if ours_delivered:
+                _log(watch_root, f"directly handed off {spooled.name} {detail}")
+            elif direct.last_error:
+                _log(
+                    watch_root,
+                    f"spooled {spooled.name} {detail}; direct handoff deferred: "
+                    f"{direct.last_error}",
+                )
+            else:
+                _log(
+                    watch_root,
+                    f"spooled (direct handoff deferred, will retry on a later run) "
+                    f"{spooled.name} {detail} handed-off={len(delivered)}",
+                )
+            return 0
+
         outcome = publisher.publish(meta)
 
         detail = f"text={transcript!r}" if args.log_transcript else f"chars={len(transcript)}"

@@ -14,10 +14,12 @@ by watching Superwhisper's recordings folder. VoiceInk writes no such folder, so
 talk. `macrovoice` is the missing piece.
 
 ```
-VoiceInk Mode (Output = Custom Command)
-  -> macrovoice.sh --mode <name>
-  -> ~/macrovoice/recordings/<id>/meta.json     (atomic directory rename)
-  -> stock macrowhisper: validate -> match triggers -> run action
+watch mode (the default)
+VoiceInk -> macrovoice.sh -> ~/macrovoice/recordings/<id>/meta.json -> macrowhisper watcher
+
+direct mode (for Superwhisper + VoiceInk together)
+VoiceInk -> macrovoice.sh --handoff direct -> queued meta.json
+         -> macrowhisper --run-auto --meta <generated-meta.json>
 ```
 
 Proven end to end against live VoiceInk 2.1 and macrowhisper 2.1.1: dictate, and macrowhisper
@@ -29,7 +31,7 @@ is patched and neither knows the other exists.
 - Every macrowhisper action type works: paste, URL, Shortcut, shell, AppleScript
 - Voice, app, URL and mode triggers all fire normally
 - Zero changes to VoiceInk or macrowhisper; both run stock
-- Survives the four watcher behaviours that silently drop dictations (see [How it works](#how-it-works))
+- Survives the four watcher behaviours that silently drop dictations (see [How watch-folder delivery works](#how-watch-folder-delivery-works))
 - Never loses a transcript, even when publishing fails or the process is killed at the deadline
 - Logs transcript length, not content, so the log is not a record of everything you say
 - Drives the whole pipeline from a pipe too, so actions are testable without a microphone
@@ -44,7 +46,69 @@ is patched and neither knows the other exists.
 | [macrowhisper](https://github.com/ognistik/macrowhisper) | 2.1.1 or later |
 | Python 3 | System Python is fine, no packages needed |
 
-## Setup
+## Dual Superwhisper + VoiceInk (direct handoff)
+
+Choose direct handoff when macrowhisper already watches Superwhisper and you want VoiceInk to
+run **the same** actions without changing that watch directory. Macrovoice writes no synthetic
+recording into Superwhisper in this mode, so the two sources cannot interleave.
+
+```
+Superwhisper -> ~/superwhisper (or your existing watch root) -> macrowhisper watcher -> actions
+
+VoiceInk -> macrovoice --handoff direct -> durable ~/macrovoice/.spool meta.json
+         -> macrowhisper --run-auto --meta <that meta.json> -> same actions
+```
+
+1. Keep your existing macrowhisper configuration, including its `defaults.watch`, pointed at
+   Superwhisper. Do **not** copy the sample config or change that setting for this setup.
+
+2. Make a durable Macrovoice work directory. It is Macrovoice's queue, not a macrowhisper watch
+   directory:
+
+   ```sh
+   mkdir -p ~/macrovoice/recordings
+   macrowhisper --start-service
+   ```
+
+3. In VoiceInk, create a Mode with Output = **Custom Command** and use the full path to your
+   checkout, for example:
+
+   ```sh
+   /absolute/path/to/macrovoice/macrovoice.sh --handoff direct --mode voiceink
+   ```
+
+   Use a distinct `--mode` value in each VoiceInk Mode when you use macrowhisper's
+   `triggerModes`. Keep an ordinary paste Mode as VoiceInk's default and give this bridge Mode a
+   shortcut; the section on [Picking the Mode](#picking-the-mode-the-trap-everyone-hits) explains
+   why.
+
+4. Verify the arrangement without changing the Superwhisper watch configuration:
+
+   ```sh
+   /absolute/path/to/macrovoice/macrovoice.sh doctor --check --handoff direct
+   ```
+
+   In direct mode, `doctor` expects macrowhisper's configured watch root to be different from
+   `~/macrovoice` and reports which Superwhisper directory it found.
+
+5. If a direct invocation cannot run macrowhisper, its `meta.json` remains in
+   `~/macrovoice/.spool/`. After fixing the cause, retry it with:
+
+   ```sh
+   /absolute/path/to/macrovoice/macrovoice.sh --handoff direct --drain-only
+   ```
+
+   Macrovoice removes a queued file only after `macrowhisper --run-auto --meta` exits with status
+   0 and reports an executed action. The service must be running; zero alone does not prove delivery.
+   Bypassed or unmatched dictations stay queued for manual review. As with any retried action,
+   make external side-effecting actions idempotent if an interrupted
+   command could have completed its work before reporting a failure.
+
+## Watch-folder setup (default)
+
+The original watch-folder delivery remains the default for a VoiceInk-only installation. It is a
+separate setup: use it only when you want macrowhisper to watch `~/macrovoice`, rather than a real
+Superwhisper directory.
 
 **1. Install macrowhisper and create a watch directory**
 
@@ -191,9 +255,11 @@ rewritten at the start of every dictation, so it only records what the last one 
 shortcut. Normal dictation then pastes as usual and never depends on macrowhisper being alive;
 the shortcut routes through the bridge on demand.
 
-## Set `simEsc: false`, or macrowhisper will discard your work
+## Watch-folder delivery: set `simEsc: false`, or macrowhisper will discard your work
 
-The sample config sets this for you. If you write your own, do not skip it.
+The sample config sets this for you. If you use the direct Superwhisper + VoiceInk setup above,
+leave your established Superwhisper configuration alone; direct handoff does not change `simEsc`
+or add a recording window.
 
 macrowhisper defaults `simEsc` to **true** and, before pasting, posts a literal Escape keypress
 to the system-wide HID event tap (`Utils/Accessibility.swift:477-494`, `simulateKeyDown` key 53).
@@ -212,6 +278,8 @@ paste bug in one app rather than a global setting doing collateral damage.
 
 ```sh
 ./macrovoice.sh doctor --check
+# Superwhisper + VoiceInk direct handoff:
+./macrovoice.sh doctor --check --handoff direct
 ```
 
 Twenty-seven checks across both apps, reported in the order you hit them. It is read-only: it never
@@ -246,10 +314,12 @@ Exit codes: `0` healthy, `1` a fatal problem remains, `2` a fatal check could no
 | Flag | Default | Description |
 | --- | --- | --- |
 | `--mode <name>` | none | Written as `modeName`, feeding macrowhisper's `triggerModes` |
-| `--watch <path>` | `$MACROVOICE_WATCH`, else `~/macrovoice` | macrowhisper's watch root. See [Upgrading](#upgrading-from-mw-bridge) |
+| `--handoff <watch\|direct>` | `watch` | `watch` publishes into macrowhisper's watch root; `direct` invokes `macrowhisper --run-auto --meta` and keeps that watch root unchanged |
+| `--macrowhisper-bin <path>` | `macrowhisper` | Executable used by direct handoff; useful when it is not on VoiceInk's PATH |
+| `--watch <path>` | `$MACROVOICE_WATCH`, else `~/macrovoice` | macrowhisper's watch root in `watch` mode; Macrovoice's durable work directory in `direct` mode. See [Upgrading](#upgrading-from-mw-bridge) |
 | `--gap <seconds>` | `1.0` | Minimum spacing between publishes |
-| `--drain-only` | off | Publish anything left in the spool and exit |
-| `--no-liveness-check` | off | Publish even when macrowhisper is provably not running. See below |
+| `--drain-only` | off | Publish (`watch`) or directly hand off (`direct`) anything left in the spool, then exit |
+| `--no-liveness-check` | off | In `watch` mode, publish even when macrowhisper is provably not running. See below |
 | `--log-transcript` | off | Log transcript text instead of just its length |
 
 ## Text input, without a microphone
@@ -261,9 +331,11 @@ variable is absent. So the entire pipeline runs from a pipe, with no dictation a
 echo "ask google best pizza in madrid" | ./macrovoice.sh
 ```
 
-That publishes a real `meta.json`, and macrowhisper matches triggers and runs its action exactly as
-it would for a spoken dictation. It is the cheapest way to test an action you are writing, and it
-also makes the bridge scriptable by anything that can write to a pipe.
+That publishes a real `meta.json` in watch mode, and macrowhisper matches triggers and runs its
+action exactly as it would for a spoken dictation. Add `--handoff direct` to exercise the exact
+direct-CLI path while keeping an existing Superwhisper watch root unchanged. It is the cheapest way
+to test an action you are writing, and it also makes the bridge scriptable by anything that can
+write to a pipe.
 
 Point it somewhere harmless while you experiment, so you are not firing actions into your real
 setup:
@@ -274,8 +346,8 @@ echo "hello world" | ./macrovoice.sh --watch /tmp/mv-scratch
 cat /tmp/mv-scratch/recordings/*/meta.json
 ```
 
-Pair it with macrowhisper's own dry run, which resolves the full action-selection pipeline against
-a hand-written `meta.json` and skips `moveTo`, so nothing is consumed:
+The following executes real actions against a hand-written `meta.json`; it is not a dry run.
+It skips `moveTo` for a direct JSON file:
 
 ```sh
 macrowhisper --run-auto --meta /path/to/meta.json
@@ -291,7 +363,7 @@ Three things worth knowing:
   stdin genuinely is the only source of the words. If you call `macrovoice` from something that
   opens a pipe and never closes it, pass the transcript in the environment variable instead.
 
-## How it works
+## How watch-folder delivery works
 
 macrowhisper's watcher has four behaviours a naive bridge trips over. Each is a **silent**
 failure: nothing errors, the dictation just disappears. Line references are to
@@ -329,6 +401,20 @@ so only a clean stop (`--stop-service`, an upgrade, a logout) leaves it down. Pa
 macrowhisper is listening, not whether the one watching *your* directory is. With the normal
 one-daemon setup those are the same question.
 
+### Direct handoff bypasses the watcher deliberately
+
+With `--handoff direct`, Macrovoice still stages every generated `meta.json` in `.spool/` before
+doing anything else, but it never moves the file into `recordings/`. It holds the same cross-process
+drain lock and calls:
+
+```sh
+macrowhisper --run-auto --meta /path/to/generated/meta.json
+```
+
+This lets macrowhisper continue watching Superwhisper normally. A zero exit plus an explicit
+execution acknowledgment removes the queued file; any other response leaves it queued for the
+next direct invocation or `--handoff direct --drain-only`.
+
 Plus one from VoiceInk: it suppresses its own paste and then kills the command at 10 seconds
 (`TranscriptionDelivery.swift:43-46`, `:115`), so the transcript exists nowhere else.
 `macrovoice` spools first, unconditionally, and only then publishes. It always exits 0, because
@@ -341,9 +427,9 @@ delivered, and a 633-character dictation arrived intact.
 
 ## Tests
 
-535 tests, 11 skipped: 274 on the delivery path, 261 for `doctor`. Every number in this section is
+539 tests, 11 skipped: 276 on the delivery path, 263 for `doctor`. Every number in this section is
 derived from `unittest` discovery by `tests/test_readme.py`, because all of them had drifted at
-least once, one of them by 89. Total branch coverage is 99%
+least once, one of them by 89. Before the direct-handoff addition, total branch coverage was 99%
 (99.36%), measured across the whole package with subprocess tracing. That last part matters: a
 naive run reports `cli.py` at 0%, which is wrong, because its tests drive it as a real subprocess
 that `coverage` cannot see without `COVERAGE_PROCESS_START` and a `sitecustomize.py`. Every
@@ -356,9 +442,9 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 
 | File | Tests | Covers |
 | --- | --- | --- |
-| `tests/test_doctor_*.py` (9 files) | 261 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
+| `tests/test_doctor_*.py` (9 files) | 263 | `doctor`'s checks, adapters, runner, report and status parser, exercised without a real macrowhisper |
 | `tests/test_publisher.py` | 57 | Staging, spool, drain lock, burst spacing, atomic renames, name monotonicity, cross-process collisions, and a future-dated `.last-publish` no longer stalling delivery |
-| `tests/test_cli.py` | 42 | The CLI driven through real subprocesses, including the exit-code policy, the open-stdin regression, and which watch root a bare invocation resolves to |
+| `tests/test_cli.py` | 44 | The CLI driven through real subprocesses, including direct `--run-auto --meta` handoff, recovery after a failed handoff, the exit-code policy, the open-stdin regression, and which watch root a bare invocation resolves to |
 | `tests/test_integration_safety.py` | 26 | The integration suite's own guard against hijacking your macrowhisper |
 | `tests/test_harness_port.py` | 24 | That the oracle still matches macrowhisper's validation gate, branch for branch |
 | `tests/test_meta.py` | 23 | A 31-entry escaping matrix and the `meta.json` schema contract |
@@ -371,7 +457,7 @@ macOS across Python 3.9, 3.12 and 3.13. The 3.9 entry is deliberate: `macrovoice
 | `tests/test_readme.py` | 6 | That the counts in this section, and the heading above, still match the suite |
 
 ```sh
-python3 -m unittest discover -s tests -t tests -v      # 535 tests, 11 skipped
+python3 -m unittest discover -s tests -t tests -v      # 539 tests, 11 skipped
 MACROVOICE_INTEGRATION=1 python3 -m unittest discover -s tests -t tests
 ```
 
@@ -546,7 +632,8 @@ resolve at action time.
 | :--- | :--- |
 | `macrovoice/transcript.py` | Resolve the transcript from env, with stdin fallback |
 | `macrovoice/meta.py` | Build and serialize the `meta.json` document (pure) |
-| `macrovoice/publisher.py` | Staging, spool, drain lock, atomic renames |
+| `macrovoice/publisher.py` | Staging, spool, drain lock, atomic renames, and direct-queue ownership |
+| `macrovoice/handoff.py` | Runs direct `macrowhisper --run-auto --meta` delivery without logging transcript text |
 | `macrovoice/cli.py` | Wiring, logging, exit-code policy |
 | `macrovoice/listener.py` | Asks macrowhisper whether anything is listening before publishing |
 | `macrovoice/watch.py` | Which watch root a bare invocation uses, and the `~/mw-bridge` fallback |
@@ -558,7 +645,8 @@ resolve at action time.
 
 ## Troubleshooting
 
-**Start with `./macrovoice.sh doctor --check`.** Nine of the thirteen setup traps this project
+**Start with `./macrovoice.sh doctor --check`** (or add `--handoff direct` for the dual
+Superwhisper + VoiceInk setup). Nine of the thirteen setup traps this project
 has hit in practice are detected there, including the three that silently look like the bridge
 being broken.
 
@@ -566,7 +654,8 @@ being broken.
 | --- | --- |
 | Nothing happens at all | Is your Mode default or shortcut-bound? See [Picking the Mode](#picking-the-mode-the-trap-everyone-hits) |
 | Text pastes normally, your command never runs | The same thing. The Mode is inert |
-| The bridge publishes but nothing fires | Does macrowhisper's **saved** config match? `macrowhisper --get-config`, then check its `watch` |
+| The bridge publishes but nothing fires | In watch mode, does macrowhisper's **saved** config match? `macrowhisper --get-config`, then check its `watch` |
+| Direct handoff does nothing | Run `./macrovoice.sh doctor --check --handoff direct`; then inspect `~/macrovoice/.spool/` and retry with `--handoff direct --drain-only` |
 | `doctor` warns about the watch directory name | You are on the old `~/mw-bridge`. Harmless. See [Upgrading](#upgrading-from-mw-bridge) |
 | Both `~/mw-bridge` and `~/macrovoice` exist | A half-finished migration. macrovoice uses `~/macrovoice`; make sure macrowhisper does too |
 | Some dictations do nothing | Check macrowhisper's log for `burst protection` or `older than existing`, then raise `--gap` |
