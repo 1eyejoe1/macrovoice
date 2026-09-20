@@ -4,8 +4,8 @@ Macrovoice was originally created by [caasols](https://github.com/caasols).
 Credit for the original project and its implementation belongs to them; see the
 [upstream repository](https://github.com/caasols/macrovoice).
 
-This personal fork adds direct Macrowhisper handoff for using VoiceInk alongside
-Superwhisper. The fork's changes were **vibe coded with OpenAI Codex**. The fork
+This personal fork adds direct Macrowhisper handoff for using VoiceInk or Spokenly
+alongside Superwhisper. The fork's changes were **vibe coded with OpenAI Codex**. The fork
 owner has limited familiarity with the code and does not provide technical support
 or ongoing maintenance commitments. This fork is provided as-is; questions, issues,
 discussions, and pull requests will not be reviewed or answered by the fork owner.
@@ -114,6 +114,76 @@ VoiceInk -> macrovoice --handoff direct -> durable ~/macrovoice/.spool meta.json
    Bypassed or unmatched dictations stay queued for manual review. As with any retried action,
    make external side-effecting actions idempotent if an interrupted
    command could have completed its work before reporting a failure.
+
+## Spokenly setup (direct handoff)
+
+Spokenly can feed the same Macrovoice bridge through its **Post-AI Script** slot.
+This setup is based on [Spokenly's official Bash Scripts documentation](https://spokenly.app/docs/modes/bash-scripts)
+and Macrovoice's existing standard-input support. It has not yet been verified with
+a live Spokenly dictation; the VoiceInk test results below do not establish Spokenly compatibility.
+
+Use Spokenly's direct-download macOS build. Its App Store build restricts access to
+external processes and the wider filesystem. Keep Macrowhisper running, with its
+existing Superwhisper watch directory and actions configured as usual.
+
+In the Spokenly mode you want to use, paste this into **Post-AI Script**:
+
+```sh
+printf '%s\n' 'output_mode=history_only' >> "$SPOKENLY_CONTROL_FILE"
+
+unset VOICEINK_TRANSCRIPT
+
+"$HOME/.config/macrovoice/macrovoice.sh" \
+  --handoff direct \
+  --mode spokenly \
+  --macrowhisper-bin /opt/homebrew/bin/macrowhisper
+```
+
+This example assumes Macrovoice is installed at `~/.config/macrovoice` and
+Macrowhisper at `/opt/homebrew/bin/macrowhisper`. Adjust the paths to your installation;
+`command -v macrowhisper` in Terminal reports its executable path.
+
+Spokenly supplies the text on standard input; Macrovoice reads it directly, so no
+`cat` or transcript variable is needed. Clearing `VOICEINK_TRANSCRIPT` prevents an
+inherited VoiceInk value from overriding that input. `history_only` selects Spokenly's
+documented output mode for scripts that deliver text themselves. Macrovoice normally
+prints nothing, which also stops Spokenly's insertion pipeline. Macrowhisper performs
+the resulting paste or other action.
+
+The Post-AI slot receives text after any AI instructions; those instructions can be
+left blank. Change `--mode spokenly` to a distinct label for each Spokenly mode when
+using Macrowhisper's `triggerModes`. The label is supplied explicitly, not detected
+automatically from Spokenly.
+
+Test first by dictating a short sentence into an empty text document. Spokenly's
+**Test Script** button also runs the command, so it can trigger real Macrowhisper
+actions. If nothing happens, inspect `~/macrovoice/macrovoice.log` and `.spool/`
+(or your configured `--watch` directory). Delivery failures remain queued and may
+be retried on a later invocation. To explicitly retry after fixing the problem:
+
+```sh
+"$HOME/.config/macrovoice/macrovoice.sh" --handoff direct --drain-only \
+  --macrowhisper-bin /opt/homebrew/bin/macrowhisper
+```
+
+Macrovoice usually exits 0 even when delivery is deferred, so Spokenly may show no
+error alert. Review queued transcripts before retrying: their actions run in the
+context active at delivery time. The existing six-second handoff budget still applies,
+even though Spokenly allows scripts up to 30 seconds.
+
+### Which parts of this README apply to Spokenly?
+
+| Topic | Applies to Spokenly? |
+| --- | --- |
+| Macrowhisper actions, voice triggers, placeholders, chains, and shell-placeholder quoting | Yes: both apps feed the same Macrowhisper machinery. AI rewriting can alter trigger phrases. |
+| Mode triggers | Yes, using the explicit `--mode` label above; existing rules naming `voiceink` must be adjusted or extended for `spokenly`. |
+| Direct handoff, queue recovery, and text piped through stdin | Yes. Add `--handoff direct` to pipe examples intended for this setup. |
+| Sample Macrowhisper configuration | Action definitions are examples you can adapt. Do not copy it over your existing configuration: its watch directory is for the original watch-folder setup. |
+| Watch-folder setup, startup waiting, publish spacing, and `simEsc` warning | These describe watcher delivery. Use direct handoff for Spokenly; CLI execution has no practical `simEsc` effect. |
+| VoiceInk Custom Command setup, mode shortcuts/defaults, `probe.sh`, and VoiceInk preference commands | VoiceInk-specific; use Spokenly's Post-AI Script setup instead. |
+| `doctor` | Still inspects VoiceInk, not Spokenly. It can flag missing VoiceInk settings on a working Spokenly setup; it is not a Spokenly readiness check. |
+| VoiceInk history/audio retention, Unicode normalization, and measured VoiceInk behavior | Not established for Spokenly. Check Spokenly's own settings and documentation. |
+| Duration and context metadata | This script passes text and the mode label only. Macrovoice does not map Spokenly's duration or context variables; its generated metadata still omits duration and segments. |
 
 ## Watch-folder setup (default)
 
@@ -286,6 +356,9 @@ perfectly into a browser address bar or a terminal, where Escape is harmless, so
 paste bug in one app rather than a global setting doing collateral damage.
 
 ## Diagnosing a broken setup
+
+For Spokenly, see [its setup and troubleshooting notes](#spokenly-setup-direct-handoff).
+`doctor` still checks VoiceInk and does not validate Spokenly's configuration.
 
 ```sh
 ./macrovoice.sh doctor --check
